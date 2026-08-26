@@ -1,0 +1,39 @@
+# 场景清单示例（scenarios.yaml）
+#
+# 每个场景字段：
+#   id         唯一标识（用于 junit case name 与过滤）
+#   type       gazebo | isaac（仅作文档，编排器按 run 命令实际执行）
+#   run        执行命令；{seed} 与 {out_dir} 会被替换
+#   baselines  期望指标基线（与仿真输出的 SIM_METRICS JSON 对比）
+#   tolerance  该场景的容差（覆盖全局）
+#   timeout    单场景超时（秒）
+#   ignore_rc  是否忽略进程退出码（某些仿真器正常结束也返回非 0）
+#
+# 仿真脚本需向 stdout 打印一行：
+#   SIM_METRICS:{"tracking_error":0.031,"collisions":0}
+
+scenarios:
+  - id: gazebo.nav.smoke
+    type: gazebo
+    run: "gz sim -s -r {out_dir}/nav.sdf && python3 eval_nav.py --out {out_dir}/nav.json"
+    baselines:
+      tracking_error: 0.05
+      collisions: 0
+    tolerance: 0.05
+    timeout: 300
+
+  - id: gazebo.arm.critical
+    type: gazebo
+    run: "gz sim -s -r {out_dir}/arm.sdf && python3 eval_arm.py --out {out_dir}/arm.json"
+    baselines:
+      final_pose_error: 0.02
+    tolerance: 0.10
+    timeout: 300
+
+  - id: isaac.perception.heavy
+    type: isaac
+    run: "isaac-sim.sh --headless -- /ws/scripts/isaac_perception.py --seed {seed} --out {out_dir}"
+    baselines:
+      detection_mAP: 0.85
+    tolerance: 0.02
+    timeout: 1800

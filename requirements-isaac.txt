@@ -1,0 +1,1 @@
+# Isaac Sim 场景脚本 Python 依赖（Dockerfile.isaac 构建时安装；按需补充）

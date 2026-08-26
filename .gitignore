@@ -1,0 +1,21 @@
+# --- 本地环境 ---
+.DS_Store
+
+# --- 凭据与秘密 ---
+.env
+.env.*
+
+# --- Python ---
+__pycache__/
+*.pyc
+
+# --- colcon / ROS 构建产物 ---
+build/
+install/
+log/
+.venv/
+
+# --- 仿真产物 ---
+sim_out/
+*.bag
+*.mp4

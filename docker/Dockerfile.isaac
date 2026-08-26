@@ -1,0 +1,31 @@
+# ============================================================================
+# NVIDIA Isaac Sim 仿真镜像（需要 GPU + nvidia 运行时）
+# 基于官方 Isaac Sim 基础镜像，叠加项目依赖与场景脚本
+# 构建：docker build -f docker/Dockerfile.isaac -t sim/isaac:6.0.1 .
+# 运行：docker run --gpus all --rm sim/isaac:6.0.1 \
+#         /isaac-sim/isaac-sim.sh --headless -- /ws/scripts/isaac_scenario.py
+# 注：Isaac Sim 6.0（2026-06 GA）入口脚本以官方镜像文档为准，接入时校对 ENTRYPOINT
+# ============================================================================
+ARG ISAAC_VERSION=6.0.1
+FROM nvcr.io/nvidia/isaac-sim:${ISAAC_VERSION}
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV ISAAC_SIM_HEADLESS=1
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# 项目 Python 依赖（按实际场景补充：强化学习、控制库等）
+COPY requirements-isaac.txt /tmp/requirements-isaac.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-isaac.txt
+
+# 工作区：场景脚本与编排入口
+WORKDIR /ws
+COPY . /ws
+
+# 无头入口：直接执行传入的 Python 场景脚本
+ENTRYPOINT ["/isaac-sim/isaac-sim.sh", "--headless", "--"]
+# 默认参数（可被 docker run 覆盖）：运行默认场景
+CMD ["/ws/scripts/isaac_scenario.py"]

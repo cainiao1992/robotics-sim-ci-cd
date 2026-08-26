@@ -1,0 +1,44 @@
+# ============================================================================
+# 本地一键仿真回归（开发机 / 调试用，等价于 CI 中的 sim-test 阶段）
+# 用法：docker compose -f docker-compose.sim.yml up --abort-on-container-exit
+# 说明：
+#   - gazebo 服务：CPU 无头跑场景，产出 junit.xml / metrics.json / rosbag
+#   - isaac 服务：需要宿主机有 NVIDIA 驱动与 nvidia-container-toolkit；无 GPU 可注释掉
+# ============================================================================
+services:
+  gazebo:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.gazebo
+    working_dir: /ws
+    volumes:
+      - .:/ws
+    command: >
+      bash -c "source /opt/ros/humble/setup.bash &&
+               source install/setup.bash &&
+               python3 scripts/run_sim_tests.py
+                 --scenario-dir sim/scenarios
+                 --seed 42 --tolerance 0.05
+                 --out-dir /ws/sim_out"
+    restart: "no"
+
+  isaac:
+    # 本地构建并命名为该 tag（与 docker/Dockerfile.isaac 头注释一致）；
+    # 仅写 image 无 build 时，本地无镜像会误去 Docker Hub 拉取 sim/isaac 而失败
+    image: sim/isaac:6.0.1
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.isaac
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    working_dir: /ws
+    volumes:
+      - .:/ws
+    command: >
+      /ws/scripts/isaac_scenario.py
+    restart: "no"

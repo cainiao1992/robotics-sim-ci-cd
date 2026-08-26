@@ -1,0 +1,42 @@
+# ============================================================================
+# 无头 Gazebo + ROS 2 仿真镜像
+# 特点：CPU 可跑（仅物理/传感器，无渲染）；用于 CI 冒烟与场景回归
+# 构建：docker build -f docker/Dockerfile.gazebo -t sim/gazebo:ros2-humble .
+# ============================================================================
+FROM ros:humble-ros-base
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV ROS_DOMAIN_ID=0
+
+# OSRF 仓库：gz-harmonic 不在 Ubuntu/ROS 官方源中，必须先添加（基础镜像为 Jammy）
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && curl -fsSL https://packages.osrfoundation.org/gazebo.gpg \
+         -o /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] https://packages.osrfoundation.org/gazebo/ubuntu-stable jammy main" \
+         > /etc/apt/sources.list.d/gazebo-stable.list \
+    && rm -rf /var/lib/apt/lists/*
+
+# 基础工具 + Gazebo（Harmonic）+ ROS-Gazebo 桥接
+# Humble 官方配对是 Fortress；Harmonic 桥接用 OSRF 提供的 ros-humble-ros-gzharmonic（非官方 ROS 包）。
+# 不用 ros-gz* 通配：会同时装入 Fortress 系包，与 Harmonic 库冲突
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-colcon-common-extensions \
+    python3-pip \
+    python3-yaml \
+    gz-harmonic \
+    ros-humble-ros-gzharmonic \
+    ros-humble-controller-manager \
+    ros-humble-ros2controlcli \
+    && rm -rf /var/lib/apt/lists/*
+
+# 确定性 & 无头运行所需
+RUN pip3 install --no-cache-dir \
+    pytest \
+    ros2cli \
+    numpy
+
+WORKDIR /ws
+# 默认启动：无渲染服务器模式（在 CI 中由编排脚本调用）
+#   gz sim -s -r scenario.sdf        # 仅 server，CPU 物理
+#   gz sim -r scenario.sdf --headless-rendering   # 需要渲染但无窗口
+CMD ["bash"]

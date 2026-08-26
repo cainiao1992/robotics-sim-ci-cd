@@ -1,0 +1,140 @@
+# ============================================================================
+# GitLab CI 流水线：ROS 2 + Gazebo / Isaac Sim 端到端仿真回归
+# 适用：GitLab Runner 已配置（含 nvidia 运行时用于 Isaac Sim 场景）
+# 用法：复制到仓库根 .gitlab-ci.yml，按需修改 variables 与规则
+# ============================================================================
+
+stages:
+  - build
+  - sim-test
+  - report
+
+# ---- 公共配置 -------------------------------------------------------------
+variables:
+  REGISTRY: "registry.example.com/robotics"      # 私有镜像仓库
+  GAZEBO_IMAGE: "${REGISTRY}/sim-gazebo:ros2-humble"
+  ISAAC_IMAGE: "${REGISTRY}/sim-isaac:6.0.1"
+  SCENARIO_DIR: "sim/scenarios"                  # 场景文件目录
+  SEED: "42"                                     # 确定性种子
+  METRIC_TOLERANCE: "0.05"                       # 指标容差 5%
+  SCENARIO_FILTER: ""                            # 场景过滤正则（job 级覆盖）
+  SHARD_INDEX: "0"                               # 分片序号（job 级覆盖）
+  SHARD_COUNT: "1"                               # 分片总数（job 级覆盖）
+
+# 复用：构建缓存（colcon / pip）
+.cache_template: &cache
+  cache:
+    key: "${CI_COMMIT_REF_SLUG}"
+    paths:
+      - build/
+      - install/
+      - log/
+      - .venv/
+
+# ---- 1. 构建阶段 -----------------------------------------------------------
+build:ros2:
+  stage: build
+  image: ros:humble-ros-base
+  <<: *cache
+  script:
+    - apt-get update && apt-get install -y python3-colcon-common-extensions
+    - source /opt/ros/humble/setup.bash
+    - colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+    - source install/setup.bash
+    - ros2 pkg list   # 冒烟：确认编译产物可加载
+  artifacts:
+    paths:
+      - build/
+      - install/
+    expire_in: 1 day
+
+build:images:
+  stage: build
+  image: docker:24
+  services: [docker:24-dind]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH =~ /^release/'
+  script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$REGISTRY"
+    - docker build -f docker/Dockerfile.gazebo -t "$GAZEBO_IMAGE" .
+    - docker push "$GAZEBO_IMAGE"
+
+# ---- 2. 仿真测试阶段（按场景矩阵并行）--------------------------------------
+.sim_template: &sim
+  stage: sim-test
+  <<: *cache
+  dependencies: [build:ros2]
+  script:
+    - source install/setup.bash
+    - python3 scripts/run_sim_tests.py
+        --scenario-dir "$SCENARIO_DIR"
+        --seed "$SEED"
+        --tolerance "$METRIC_TOLERANCE"
+        --filter "$SCENARIO_FILTER"
+        --shard-index "$SHARD_INDEX"
+        --shard-count "$SHARD_COUNT"
+        --out-dir "$CI_PROJECT_DIR/sim_out"
+  artifacts:
+    when: always
+    paths:
+      - sim_out/junit.xml
+      - sim_out/metrics.json
+      - sim_out/*.bag
+      - sim_out/*.mp4
+    reports:
+      junit: sim_out/junit.xml        # GitLab 原生测试报告
+      metrics: sim_out/metrics.json   # GitLab 指标趋势
+    expire_in: 7 days
+
+# Gazebo 轻量冒烟 + 关键场景：MR 分支即跑（CPU 节点即可）
+gazebo:smoke:
+  <<: *sim
+  image: "$GAZEBO_IMAGE"
+  tags: [cpu]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  variables:
+    SCENARIO_FILTER: "smoke|critical"
+
+# Gazebo 全量场景：main / release 跑（并行分片）
+gazebo:full:
+  <<: *sim
+  image: "$GAZEBO_IMAGE"
+  tags: [cpu]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH =~ /^release/'
+  parallel:
+    matrix:
+      - SHARD: [0, 1, 2, 3]           # 4 分片并行
+  variables:
+    SHARD_INDEX: "$SHARD"
+    SHARD_COUNT: "4"
+
+# Isaac Sim 重型场景：仅在 nightly / release 跑，需要 GPU 节点
+isaac:heavy:
+  <<: *sim
+  image: "$ISAAC_IMAGE"
+  tags: [gpu]                         # 约束到带 nvidia 运行时的 Runner
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^release/ || $CI_PIPELINE_SOURCE == "schedule"'
+  variables:
+    SCENARIO_FILTER: "isaac"
+    HEADLESS: "1"
+
+# ---- 3. 联动与门禁阶段 -----------------------------------------------------
+report:link:
+  stage: report
+  image: python:3.10-slim
+  needs: [gazebo:smoke]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    - pip install requests
+    - python3 scripts/ci_tool_link.py
+        --provider gitlab
+        --project "$CI_PROJECT_ID"
+        --mr-iid "$CI_MERGE_REQUEST_IID"
+        --metrics sim_out/metrics.json
+        --junit sim_out/junit.xml
+        --token "$GITLAB_TOKEN"
+  allow_failure: false
